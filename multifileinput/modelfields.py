@@ -26,9 +26,6 @@ class FileItem(_FieldFile):
     
     def __init__(self, instance, field, name):
         super(FileItem, self).__init__(instance, field, name)
-        
-    def filename(self):
-        return self.field.get_filename(self.name)
     
     def delete(self, save=True):
         # Only close the file if it's already open, which we know by the
@@ -100,17 +97,11 @@ class FieldFiles(object):
                 yield f
     
     def __str__(self):
-        return ", ".join([f.filename() for f in self])
+        return ", ".join([f.field.get_filename(f.name) for f in self])
     
-#     def __len__(self):
-#         if not self._files:
-#             return 0
-#         else:
-#             return len(self)
-#     
-#     def __nonezero__(self):
-#         return self._files and len(self)
-        
+    
+
+
 
 class FieldFilesDescriptor(object):
     

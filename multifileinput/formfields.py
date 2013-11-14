@@ -7,7 +7,7 @@ from django.forms.util import flatatt
 from django.forms.widgets import CheckboxInput, FileInput as _FileInput
 from django.utils.html import conditional_escape
 from django.utils.safestring import mark_safe
-from django.utils.translation import ugettext_lazy
+from django.utils.translation import ugettext_lazy as _
 import base64
 import binascii
 try:
@@ -42,8 +42,8 @@ class FileInput(_FileInput):
 
 
 class ClearableFileInput(FileInput):
-    initial_text = ugettext_lazy('Currently')
-    clear_checkbox_label = ugettext_lazy('Delete')
+    initial_text = _('Currently')
+    clear_checkbox_label = _('Delete')
     template_with_initial = """
                             <div id="id_{name}_div" class="file-upload">
                               <div class="current-files">
@@ -76,7 +76,7 @@ class ClearableFileInput(FileInput):
                                                                   attrs={'id': clear_checkbox_id})
                     file_url = conditional_escape(f.url)
                     file_name = conditional_escape(f.name)
-                    file_shortname = conditional_escape(f.filename())
+                    file_shortname = conditional_escape(f.field.get_filename(f.name))
                     html = template_with_clear.format(initial_text=self.initial_text,
                                                       file_url=file_url,
                                                       file_name=file_name,
@@ -137,60 +137,62 @@ class ClearableFileInput(FileInput):
 
 class FileField(_FileField):
     widget = ClearableFileInput
+    default_error_messages = {
+        'invalid': _("No file was submitted. Check the encoding type on the form."),
+        'missing': _("No file was submitted."),
+        'empty': _("The submitted file is empty."),
+        'max_length': _('Ensure this filename has at most %(max)d characters (it has %(length)d).'),
+        'contradiction': _('Please either submit a file or check the clear checkbox, not both.'),
+        'max_total_file_count': _("ファイル数が多過ぎます。"),
+        'min_total_file_count': _("ファイル数が少な過ぎます。"),
+        'max_total_file_size': _("合計のファイルサイズが大き過ぎます"),
+        'max_each_file_size': _("サイズの大き過ぎるファイルが含まれています。"),
+    }
 
     def __init__(self, *args, **kwargs):
+        self.max_total_file_count = kwargs.pop('max_total_file_count', None)
+        self.min_total_file_count = kwargs.pop('min_total_file_count', 0)
+        self.max_total_file_size = kwargs.pop('max_total_file_size', None)
+        self.max_each_file_size = kwargs.pop('max_each_file_size', None)
         super(FileField, self).__init__(*args, **kwargs)
         if not hasattr(self, "allow_empty_file"):
             self.allow_empty_file = kwargs.pop('allow_empty_file', False) # django1.4?
+        
     
     def bound_data(self, data, initial):
         data["initial"] = initial
         return data
-
+    
+    
     def clean(self, data, initial=None):
-        #TODO: アップロード可能なファイルの総数、トータルのサイズチェック、ファイルの有無チェック
-        
-#         # If the widget got contradictory inputs, we raise a validation error
-#         if data is FILE_INPUT_CONTRADICTION:
-#             raise ValidationError(self.error_messages['contradiction'])
-        # False means the field value should be cleared; further validation is
-        # not needed.
-        if data is False:
-            if not self.required:
-                return False
-            # If the field is required, clearing is not possible (the widget
-            # shouldn't return False data in that case anyway). False is not
-            # in validators.EMPTY_VALUES; if a False value makes it this far
-            # it should be validated from here on out as None (so it will be
-            # caught by the required check).
-            data = None
-        if not data and initial:
-            return initial
-        ###return super(FileField, self).clean(data)###
-        """
-        Validates the given value and returns its "cleaned" value as an
-        appropriate Python object.
-
-        Raises ValidationError for any errors.
-        """
         value = data
-        value = self.to_python(value)
+        value = self.to_python(value, initial)
         self.validate(value)
         self.run_validators(value)
         return value
-
-    def to_python(self, data):
-        if not data:
-            return None
-        # UploadedFile objects should have name and size attributes.
-        for f in data.get("add", ()):
+    
+    
+    def to_python(self, data, initial=None):
+        data = data or ()
+        initial = initial or ()
+        files_delete = data.get('delete', ())
+        files = [f for f in initial if str(f) not in files_delete]
+        files += data.get('add', ())
+        len_files = len(files)
+        if self.max_total_file_count is not None and len_files > self.max_total_file_count:
+            raise ValidationError(self.error_messages['max_total_file_count'])
+        if self.min_total_file_count is not None and len_files < self.min_total_file_count:
+            raise ValidationError(self.error_messages['min_total_file_count'])
+        total_file_size = 0
+        for f in files:
+            # TODO: どのファイルにエラーが含まれていたか分かるようにエラーメッセージを変える
             try:
+                # UploadedFile objects should have name and size attributes.
                 file_name = f.name
                 file_size = f.size
             except AttributeError:
-            # TODO: どのファイルにエラーが含まれていたか分かるようにエラーメッセージを変える
-            # TODO: for文でエラーが大量にでないようにする
                 raise ValidationError(self.error_messages['invalid'])
+            total_file_size += file_size
             if self.max_length is not None and len(file_name) > self.max_length:
                 error_values = {'max': self.max_length, 'length': len(file_name)}
                 raise ValidationError(self.error_messages['max_length'] % error_values)
@@ -198,7 +200,13 @@ class FileField(_FileField):
                 raise ValidationError(self.error_messages['invalid'])
             if not self.allow_empty_file and not file_size:
                 raise ValidationError(self.error_messages['empty'])
+            if self.max_each_file_size and file_size > self.max_each_file_size:
+                raise ValidationError(self.error_messages['max_each_file_size'])
+        if self.max_total_file_size is not None and total_file_size > self.max_total_file_size:
+            raise ValidationError(self.error_messages['max_total_file_size'])
         return data 
     
     
-    
+
+
+
